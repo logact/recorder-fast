@@ -318,17 +318,31 @@ export default function RecorderExecutionScreen() {
     isLastChild?: boolean;
   }) => (
     <View key={item.id} style={styles.recordContainer}>
-      {/* 连接线和折叠按钮 */}
+      {/* 连接线系统 */}
       <View style={styles.connectionContainer}>
+        {/* 只为非根节点渲染垂直线 */}
+        {depth > 0 && (
+          <View style={[
+            styles.verticalLine,
+            // 如果是最后一个子项，垂直线只延伸到水平线位置
+            isLastChild && { bottom: 'auto', height: 20 }
+          ]} />
+        )}
+        
+        {/* 水平连线 */}
         <View style={styles.horizontalLine} />
-        <TouchableOpacity 
-          style={styles.collapseButton}
-          onPress={() => toggleCollapse(item.id)}
-        >
-          <Text style={styles.collapseButtonText}>
-            {item.isCollapsed ? '+' : '-'}
-          </Text>
-        </TouchableOpacity>
+
+        {/* 折叠按钮 */}
+        {item.children.length > 0 && (
+          <TouchableOpacity 
+            style={styles.collapseButton}
+            onPress={() => toggleCollapse(item.id)}
+          >
+            <Text style={styles.collapseButtonText}>
+              {item.isCollapsed ? '+' : '-'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* 记录主体内容 */}
@@ -431,9 +445,6 @@ export default function RecorderExecutionScreen() {
       {/* 子记录列表 */}
       {!item.isCollapsed && item.children.length > 0 && (
         <View style={styles.childrenContainer}>
-          <View style={styles.verticalLineContainer}>
-            <View style={{height: '100%', width: 1, backgroundColor: 'gray'}} />
-          </View>
           {item.children.map((child, index) => 
             renderTimeRecord({
               item: child,
@@ -512,41 +523,44 @@ const styles = StyleSheet.create({
   // 记录容器样式
   recordContainer: {
     position: 'relative',
-    marginLeft: 40, // 为连接线留出空间
+    marginLeft: 24, // 减小左边距，为连接线预留更合适的空间
     marginBottom: 8,
   },
 
-  // 连接线相关样式
+  // 连接线容器
   connectionContainer: {
     position: 'absolute',
-    left: -40, // 向左偏移到记录外部
+    left: -24,
     top: 0,
-    width: 40,
-    height: 40,
-    zIndex: 1,
-  },
-  horizontalLine: {
-    position: 'absolute',
-    left: 2,    // 从垂直线的中心开始
-    right: 0,
-    top: 20,    // 垂直居中
-    height: 2,
-    backgroundColor: '#e0e0e0',
-  },
-  verticalLineContainer: {
-    position: 'absolute',
-    left: -39,  // 与水平线对齐
-    top: -32,   // 延伸到父节点
     bottom: 0,
-    width: 2,
+    width: 24,
+  },
+
+  // 垂直连线
+  verticalLine: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 1,
     backgroundColor: '#e0e0e0',
   },
 
-  // 折叠按钮样式
+  // 水平连线
+  horizontalLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 20, // 与记录项中心对齐
+    height: 1,
+    backgroundColor: '#e0e0e0',
+  },
+
+  // 折叠按钮改进
   collapseButton: {
     position: 'absolute',
-    left: -6,   // 位于垂直线上
-    top: 12,    // 垂直居中
+    left: -8, // 居中于垂直线上
+    top: 12,
     width: 16,
     height: 16,
     borderRadius: 8,
@@ -555,7 +569,6 @@ const styles = StyleSheet.create({
     borderColor: '#e0e0e0',
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 2,  // 确保在线条之上
   },
   collapseButtonText: {
     fontSize: 14,
