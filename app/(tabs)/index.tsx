@@ -1,74 +1,240 @@
-import { Image, StyleSheet, Platform } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { FlatList, TouchableOpacity, View, Text, StyleSheet, Alert } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  runOnJS,
+} from 'react-native-reanimated';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
+import { recorderEvents } from './_layout';
+import { router } from 'expo-router';
 
-import { HelloWave } from '@/components/HelloWave';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
+type Recorder = {
+  id: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  totalTime: string;
+};
 
-export default function HomeScreen() {
+interface RecorderItemProps {
+  item: Recorder;
+  onDelete: (id: string) => void;
+  onPress: (id: string) => void;
+}
+
+const RecorderItem: React.FC<RecorderItemProps> = React.memo(({ item, onDelete, onPress }) => {
+  const translateX = useSharedValue(0);
+  const itemHeight = useSharedValue(70);
+  const opacity = useSharedValue(1);
+
+  const panGesture = Gesture.Pan()
+    .onChange((event) => {
+      translateX.value = Math.min(0, translateX.value + event.changeX);
+    })
+    .onEnd(() => {
+      const SWIPE_THRESHOLD = -75;
+      if (translateX.value < SWIPE_THRESHOLD) {
+        translateX.value = withSpring(-100);
+      } else {
+        translateX.value = withSpring(0);
+      }
+    });
+
+  const tapGesture = Gesture.Tap()
+    .onEnd((_event, success) => {
+      if (success) {
+        'worklet';
+        if (translateX.value === 0) {
+          runOnJS(onPress)(item.id);
+        }
+      }
+    });
+
+  const composedGestures = Gesture.Simultaneous(panGesture, tapGesture);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+  }));
+
+  const deleteButtonStyle = useAnimatedStyle(() => ({
+    opacity: withSpring(translateX.value < -75 ? 1 : 0),
+  }));
+
+  // Optimize text rendering
+  const timeContainerStyle = [styles.timeContainer, styles.noFlicker];
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12'
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-        <ThemedText>
-          Tap the Explore tab to learn more about what's included in this starter app.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          When you're ready, run{' '}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+    <GestureDetector gesture={composedGestures}>
+      <Animated.View style={[styles.itemContainer]}>
+        <Animated.View style={[styles.item, animatedStyle]}>
+          <Text style={styles.title}>{item.title}</Text>
+          <View style={timeContainerStyle}>
+            <Text style={[styles.timeText, styles.noFlicker]}>Start: {item.startTime}</Text>
+            <Text style={[styles.timeText, styles.noFlicker]}>End: {item.endTime}</Text>
+            <Text style={[styles.totalTime, styles.noFlicker]}>Total: {item.totalTime}</Text>
+          </View>
+        </Animated.View>
+        <Animated.View style={[styles.deleteButton, deleteButtonStyle]}>
+          <TouchableOpacity
+            onPress={() => {
+              Alert.alert(
+                "Delete Recorder",
+                "Are you sure you want to delete this recorder?",
+                [
+                  {
+                    text: "Cancel",
+                    style: "cancel"
+                  },
+                  {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: () => onDelete(item.id)
+                  }
+                ]
+              );
+            }}
+          >
+            <Text style={styles.deleteText}>Delete</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </Animated.View>
+    </GestureDetector>
+  );
+});
+
+const AnimatedText = Animated.createAnimatedComponent(Text);
+
+export default function RecorderListScreen() {
+  const [recorders, setRecorders] = useState<Recorder[]>([]);
+
+  useEffect(() => {
+    // Listen for new recorder events
+    const handleNewRecorder = (newRecorder: Recorder) => {
+      setRecorders(current => [newRecorder, ...current]);
+    };
+
+    recorderEvents.on('newRecorder', handleNewRecorder);
+
+    // Cleanup listener
+    return () => {
+      recorderEvents.off('newRecorder', handleNewRecorder);
+    };
+  }, []);
+
+  const handleRecorderPress = useCallback((id: string) => {
+    router.push(`/recorder/${id}`);
+  }, []);
+
+  const handleDelete = useCallback((id: string) => {
+    setRecorders(current => current.filter(recorder => recorder.id !== id));
+  }, []);
+
+  const handleAddRecorder = () => {
+    // router.push('/new-recorder');
+  };
+
+  return (
+    <GestureHandlerRootView style={styles.container}>
+      <FlatList
+        data={recorders}
+        renderItem={({ item }) => (
+          <RecorderItem
+            item={item}
+            onDelete={handleDelete}
+            onPress={handleRecorderPress}
+          />
+        )}
+        keyExtractor={item => item.id}
+        contentContainerStyle={styles.listContainer}
+      />
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
   },
-  stepContainer: {
-    gap: 8,
+  listContainer: {
+    padding: 16,
+  },
+  itemContainer: {
+    position: 'relative',
+    marginBottom: 12,
+  },
+  item: {
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: 'bold',
     marginBottom: 8,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
+  timeContainer: {
+    gap: 4,
+    minHeight: 80,
+  },
+  timeText: {
+    fontSize: 14,
+    color: '#666',
+    minWidth: 150,
+  },
+  totalTime: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333',
+    marginTop: 4,
+    minWidth: 150,
+  },
+  deleteButton: {
     position: 'absolute',
+    right: 0,
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    backgroundColor: '#F44336',
+    borderTopRightRadius: 10,
+    borderBottomRightRadius: 10,
+  },
+  deleteText: {
+    color: 'white',
+    fontWeight: '600',
+  },
+  headerButton: {
+    marginRight: 16,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'red',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerButtonText: {
+    fontSize: 24,
+    color: '#ffffff',
+    fontWeight: '600',
+    lineHeight: 28,
+  },
+  noFlicker: {
+    backfaceVisibility: 'hidden',
+    transform: [{ perspective: 1000 }],
   },
 });
