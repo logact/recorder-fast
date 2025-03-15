@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, TextInput } from 'react-native';
 import { Stack, useLocalSearchParams, router } from 'expo-router';
+import { StorageService } from '../services/storage';
 
 /**
  * TimeRecord 接口定义了记录的数据结构
@@ -17,6 +18,8 @@ interface TimeRecord {
   avatarColor: string;    // 记录图标的背景颜色
   createdAt: Date;        // 记录的创建时间
   isEditing?: boolean;    // 标记是否处于标题编辑状态
+  note?: string;          // 添加感想字段
+  isEditingNote?: boolean; // 标记是否处于感想编辑状态
 }
 
 /**
@@ -65,48 +68,59 @@ export default function RecorderExecutionScreen() {
    * 在组件首次加载时创建根记录
    */
   useEffect(() => {
-    const mockRootRecord: TimeRecord = {
-      id: id,
-      time: 0,
-      isRunning: false,
-      label: `Recording ${id}`,
-      children: [],
-      parentId: null,
-      isCollapsed: false,
-      avatarColor: generateRandomColor(),
-      createdAt: new Date(),
-      isEditing: false,
+    const initializeRecord = async () => {
+      // 加载现有记录
+      const existingRecords = await StorageService.loadRecords();
+      const existingRecord = existingRecords.find(record => record.id === id);
+
+      if (existingRecord) {
+        setTimeRecords([existingRecord]);
+      } else {
+        // 如果找不到记录，返回首页
+        router.replace("/");
+      }
     };
-    setTimeRecords([mockRootRecord]);
+
+    initializeRecord();
   }, [id]);
 
   /**
-   * 设置计时器
+   * 更新记录时间
    * 每秒更新所有正在运行的记录的时间
    */
   useEffect(() => {
-    const intervalId = setInterval(() => {
-      setTimeRecords(prev => updateRunningRecords(prev));
-    }, 1000);
+    let interval: NodeJS.Timeout;
+    
+    const updateTimes = async () => {
+      setTimeRecords(prev => {
+        // 递归更新记录树中的时间
+        const updateRecordTime = (records: TimeRecord[]): TimeRecord[] => {
+          return records.map(record => ({
+            ...record,
+            time: record.isRunning ? record.time + 1 : record.time,
+            children: record.children.length > 0 ? updateRecordTime(record.children) : record.children
+          }));
+        };
 
-    // 清理函数：组件卸载时清除计时器
-    return () => clearInterval(intervalId);
-  }, []);
+        const updatedRecords = updateRecordTime(prev);
 
-  /**
-   * 递归更新所有运行中记录的时间
-   * @param records - 需要更新的记录数组
-   * @returns 更新后的记录数组
-   */
-  const updateRunningRecords = (records: TimeRecord[]): TimeRecord[] => {
-    return records.map(record => ({
-      ...record,
-      // 如果记录正在运行，增加一秒
-      time: record.isRunning ? record.time + 1 : record.time,
-      // 递归更新子记录
-      children: updateRunningRecords(record.children)
-    }));
-  };
+        // 保存更新后的记录
+        const saveUpdatedRecords = async () => {
+          const allRecords = await StorageService.loadRecords();
+          const updatedAllRecords = allRecords.map(record => 
+            record.id === id ? updatedRecords[0] : record
+          );
+          await StorageService.saveRecords(updatedAllRecords);
+        };
+        saveUpdatedRecords();
+
+        return updatedRecords;
+      });
+    };
+
+    interval = setInterval(updateTimes, 1000);
+    return () => clearInterval(interval);
+  }, [id]);
 
   /**
    * 切换记录的运行状态
@@ -114,132 +128,142 @@ export default function RecorderExecutionScreen() {
    * 父节点的运行状态会影响子节点
    * @param recordId - 要切换状态的记录ID
    */
-  const toggleRecord = useCallback((recordId: string) => {
-    setTimeRecords(prev => {
-      /**
-       * 递归更新记录状态
-       * @param records - 当前层级的记录数组
-       * @returns 更新后的记录数组
-       */
-      const updateRecord = (records: TimeRecord[]): TimeRecord[] => {
-        // 检查目标记录是否在当前层级
-        const targetExists = records.some(r => r.id === recordId);
-        
-        if (targetExists) {
-          return records.map(record => {
-            if (record.id === recordId) {
-              // 切换目标记录的状态
-              const newIsRunning = !record.isRunning;
-              return {
-                ...record,
-                isRunning: newIsRunning,
-                // 如果停止运行，同时停止所有子记录
-                children: !newIsRunning ? 
-                  updateDescendants(record.children) : 
-                  record.children
-              };
-            }
-            // 停止同级其他记录的运行
-            return {
-              ...record,
-              isRunning: false,
-              children: updateDescendants(record.children)
-            };
-          });
-        }
-        
-        // 如果目标不在当前层级，递归查找
-        return records.map(record => {
-          const updatedChildren = updateRecord(record.children);
-          // 检查是否有运行中的子记录
-          const hasRunningDescendant = hasAnyRunningNode(updatedChildren);
-          
+  const toggleRecord = useCallback(async (recordId: string) => {
+    // 加载所有记录
+    const allRecords = await StorageService.loadRecords();
+
+    // 递归更新记录树中的执行状态
+    const updateRecordStatus = (records: TimeRecord[]): TimeRecord[] => {
+      // 检查是否有目标记录在当前层级
+      const hasTargetInLevel = records.some(record => record.id === recordId);
+      
+      return records.map(record => {
+        if (record.id === recordId) {
+          // 更新当前记录的状态
+          const newIsRunning = !record.isRunning;
           return {
             ...record,
-            // 如果有运行中的子记录，父记录也要运行
-            isRunning: hasRunningDescendant ? true : record.isRunning,
+            isRunning: newIsRunning,
+            children: newIsRunning 
+              ? record.children 
+              : updateChildrenStatus(record.children, false)
+          };
+        } else if (hasTargetInLevel) {
+          // 如果目标记录在当前层级，暂停其他同级记录
+          return {
+            ...record,
+            isRunning: false,
+            children: updateChildrenStatus(record.children, false)
+          };
+        } else if (record.children.length > 0) {
+          const updatedChildren = updateRecordStatus(record.children);
+          // 检查是否是目标记录的父节点
+          const targetChild = findRecordById(updatedChildren, recordId);
+          if (targetChild) {
+            // 如果子节点开始计时，父节点也要开始计时
+            return {
+              ...record,
+              isRunning: targetChild.isRunning,
+              children: updatedChildren
+            };
+          }
+          return {
+            ...record,
             children: updatedChildren
           };
-        });
-      };
+        }
+        return record;
+      });
+    };
 
-      /**
-       * 更新所有后代节点的状态为停止
-       * @param children - 子记录数组
-       * @returns 更新后的子记录数组
-       */
-      const updateDescendants = (children: TimeRecord[]): TimeRecord[] => {
-        return children.map(child => ({
-          ...child,
-          isRunning: false,
-          children: updateDescendants(child.children)
-        }));
-      };
+    // 递归设置所有子记录的状态
+    const updateChildrenStatus = (records: TimeRecord[], status: boolean): TimeRecord[] => {
+      return records.map(record => ({
+        ...record,
+        isRunning: status,
+        children: updateChildrenStatus(record.children, status)
+      }));
+    };
 
-      /**
-       * 检查记录树中是否有运行中的节点
-       * @param nodes - 要检查的记录数组
-       * @returns 是否存在运行中的节点
-       */
-      const hasAnyRunningNode = (nodes: TimeRecord[]): boolean => {
-        return nodes.some(node => 
-          node.isRunning || hasAnyRunningNode(node.children)
-        );
-      };
+    // 查找特定ID的记录
+    const findRecordById = (records: TimeRecord[], targetId: string): TimeRecord | null => {
+      for (const record of records) {
+        if (record.id === targetId) return record;
+        if (record.children.length > 0) {
+          const found = findRecordById(record.children, targetId);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
 
-      return updateRecord(prev);
-    });
-  }, []);
+    // 更新当前显示的记录
+    setTimeRecords(prev => updateRecordStatus(prev));
+
+    // 在所有记录中找到并更新当前记录树
+    const updatedRecords = allRecords.map(record => 
+      record.id === id ? timeRecords[0] : record
+    );
+    await StorageService.saveRecords(updatedRecords);
+  }, [id, timeRecords]);
 
   /**
    * 添加新记录
    * 可以添加根记录或子记录
    * @param parentId - 父记录ID，为null时添加根记录
    */
-  const addNewRecord = useCallback((parentId: string | null) => {
-    // 创建新记录对象
+  const addNewRecord = useCallback(async (parentId: string | null) => {
+    const newId = Date.now().toString();
+    const allRecords = await StorageService.loadRecords();
+
     const newRecord: TimeRecord = {
-      id: Date.now().toString(), // 使用时间戳作为唯一ID
+      id: newId,
       time: 0,
       isRunning: false,
-      label: '',
+      label: `Recording ${newId}`,
       children: [],
-      parentId,
+      parentId: parentId,
       isCollapsed: false,
       avatarColor: generateRandomColor(),
       createdAt: new Date(),
-      isEditing: true, // 新记录默认进入编辑状态
+      isEditing: false,
+      note: '',
+      isEditingNote: false,
     };
 
-    setTimeRecords(prev => {
-      // 添加根记录
-      if (!parentId) {
-        return [...prev, newRecord];
-      }
-
-      /**
-       * 递归查找父记录并添加子记录
-       * @param records - 当前层级的记录数组
-       * @returns 更新后的记录数组
-       */
-      const updateChildren = (records: TimeRecord[]): TimeRecord[] => {
-        return records.map(record => {
-          if (record.id === parentId) {
-            return {
-              ...record,
-              isCollapsed: false, // 展开父记录
-              children: [...record.children, newRecord]
-            };
-          }
+    // 递归更新记录及其子记录
+    const updateRecordTree = (records: TimeRecord[]): TimeRecord[] => {
+      return records.map(record => {
+        if (record.id === parentId) {
+          // 找到父记录，添加新的子记录
           return {
             ...record,
-            children: updateChildren(record.children)
+            children: [...record.children, newRecord]
           };
-        });
-      };
+        } else if (record.children.length > 0) {
+          // 递归检查子记录
+          return {
+            ...record,
+            children: updateRecordTree(record.children)
+          };
+        }
+        return record;
+      });
+    };
 
-      return updateChildren(prev);
+    // 更新当前显示的记录
+    setTimeRecords(prev => {
+      if (parentId === null) {
+        // 如果是添加根记录
+        return [...prev, newRecord];
+      }
+      // 如果是添加子记录
+      return updateRecordTree(prev);
     });
+
+    // 更新存储中的所有记录
+    const updatedRecords = updateRecordTree(allRecords);
+    await StorageService.saveRecords(updatedRecords);
   }, []);
 
   /**
@@ -263,7 +287,11 @@ export default function RecorderExecutionScreen() {
           };
         });
       };
-      return updateCollapse(prev);
+      const newRecords = updateCollapse(prev);
+      
+      // 保存更新后的记录
+      StorageService.saveRecords(newRecords);
+      return newRecords;
     });
   }, []);
 
@@ -289,7 +317,11 @@ export default function RecorderExecutionScreen() {
           };
         });
       };
-      return updateLabel(prev);
+      const newRecords = updateLabel(prev);
+      
+      // 保存更新后的记录
+      StorageService.saveRecords(newRecords);
+      return newRecords;
     });
   }, []);
 
@@ -312,50 +344,38 @@ export default function RecorderExecutionScreen() {
    * 渲染单个时间记录
    * 包括记录内容和子记录
    */
-  const renderTimeRecord = ({ item, depth = 0, isLastChild = false }: { 
-    item: TimeRecord; 
+  const renderTimeRecord = ({ 
+    item,
+    depth = 0,
+    isLastChild = false 
+  }: {
+    item: TimeRecord;
     depth?: number;
     isLastChild?: boolean;
   }) => (
     <View key={item.id} style={styles.recordContainer}>
-      {/* 连接线系统 */}
-      <View style={styles.connectionContainer}>
-        {/* 只为非根节点渲染垂直线 */}
-        {depth > 0 && (
-          <View style={[
-            styles.verticalLine,
-            // 如果是最后一个子项，垂直线只延伸到水平线位置
-            isLastChild && { bottom: 'auto', height: 20 }
-          ]} />
-        )}
-        
-        {/* 水平连线 */}
-        <View style={styles.horizontalLine} />
-
-        {/* 折叠按钮 */}
-        {item.children.length > 0 && (
-          <TouchableOpacity 
-            style={styles.collapseButton}
-            onPress={() => toggleCollapse(item.id)}
-          >
-            <Text style={styles.collapseButtonText}>
-              {item.isCollapsed ? '+' : '-'}
-            </Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* 记录主体内容 */}
-      <View style={[styles.recordItem]}>
+      <View style={[styles.recordItem, { marginLeft: depth * 24 }]}>
         <View style={styles.recordHeader}>
-          {/* 记录头像 */}
+          {/* 折叠按钮移到这里 */}
+          {item.children.length > 0 && (
+            <TouchableOpacity 
+              style={styles.collapseButton}
+              onPress={() => toggleCollapse(item.id)}
+            >
+              <Text style={styles.collapseButtonText}>
+                {item.isCollapsed ? '▸' : '▾'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* 头像 */}
           <View style={[styles.avatar, { backgroundColor: item.avatarColor }]}>
             <Text style={styles.avatarText}>
               {item.label ? item.label.charAt(0).toUpperCase() : '#'}
             </Text>
           </View>
 
-          {/* 记录详细信息 */}
+          {/* 记录内容 */}
           <View style={styles.recordContent}>
             {/* 标题部分（可编辑） */}
             <TouchableOpacity 
@@ -411,6 +431,80 @@ export default function RecorderExecutionScreen() {
               )}
             </TouchableOpacity>
 
+            {/* 添加感想部分 */}
+            <TouchableOpacity 
+              style={styles.noteContainer}
+              onPress={() => {
+                setTimeRecords(prev => {
+                  const updateEditingNote = (records: TimeRecord[]): TimeRecord[] => {
+                    return records.map(record => {
+                      if (record.id === item.id) {
+                        return { ...record, isEditingNote: true };
+                      }
+                      return {
+                        ...record,
+                        children: updateEditingNote(record.children)
+                      };
+                    });
+                  };
+                  return updateEditingNote(prev);
+                });
+              }}
+            >
+              {item.isEditingNote ? (
+                <TextInput
+                  style={styles.noteInput}
+                  value={item.note}
+                  onChangeText={(text) => {
+                    setTimeRecords(prev => {
+                      const updateNote = (records: TimeRecord[]): TimeRecord[] => {
+                        return records.map(record => {
+                          if (record.id === item.id) {
+                            return { ...record, note: text };
+                          }
+                          return {
+                            ...record,
+                            children: updateNote(record.children)
+                          };
+                        });
+                      };
+                      return updateNote(prev);
+                    });
+                  }}
+                  placeholder="Add your thoughts..."
+                  multiline
+                  autoFocus
+                  onBlur={() => {
+                    setTimeRecords(prev => {
+                      const updateNote = (records: TimeRecord[]): TimeRecord[] => {
+                        return records.map(record => {
+                          if (record.id === item.id) {
+                            return { ...record, isEditingNote: false };
+                          }
+                          return {
+                            ...record,
+                            children: updateNote(record.children)
+                          };
+                        });
+                      };
+                      const newRecords = updateNote(prev);
+                      // 保存更新后的记录
+                      StorageService.saveRecords(newRecords);
+                      return newRecords;
+                    });
+                  }}
+                />
+              ) : (
+                <View style={styles.noteDisplay}>
+                  {item.note ? (
+                    <Text style={styles.noteText}>{item.note}</Text>
+                  ) : (
+                    <Text style={styles.notePlaceholder}>Add note...</Text>
+                  )}
+                </View>
+              )}
+            </TouchableOpacity>
+
             {/* 操作按钮 */}
             <View style={styles.actionRow}>
               {/* 播放/暂停按钮 */}
@@ -435,7 +529,7 @@ export default function RecorderExecutionScreen() {
                 style={styles.addButton}
                 onPress={() => addNewRecord(item.id)}
               >
-                <Text style={styles.addButtonText}>+ Add Reply</Text>
+                <Text style={styles.addButtonText}>...</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -448,7 +542,7 @@ export default function RecorderExecutionScreen() {
           {item.children.map((child, index) => 
             renderTimeRecord({
               item: child,
-              depth: depth + 1,
+              depth: depth + 1, // 增加子项的深度
               isLastChild: index === item.children.length - 1
             })
           )}
@@ -463,10 +557,16 @@ export default function RecorderExecutionScreen() {
       {/* 页面头部 */}
       <Stack.Screen
         options={{
-          title: 'Nested Timer',
+          title: 'Voice Recorder',
+          headerShown: true,
           headerLeft: () => (
-            <TouchableOpacity onPress={() => router.back()}>
-              <Text style={styles.headerButton}>Back</Text>
+            <TouchableOpacity 
+              onPress={() => {
+                router.replace("/");
+              }}
+              style={styles.headerButton}
+            >
+              <Text style={styles.headerButtonText}>Back</Text>
             </TouchableOpacity>
           ),
         }}
@@ -510,9 +610,12 @@ const styles = StyleSheet.create({
 
   // 头部按钮样式
   headerButton: {
-    fontSize: 16,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+  },
+  headerButtonText: {
     color: '#2196F3',
-    marginLeft: 16,
+    fontSize: 16,
   },
 
   // 记录列表样式
@@ -522,60 +625,7 @@ const styles = StyleSheet.create({
 
   // 记录容器样式
   recordContainer: {
-    position: 'relative',
-    marginLeft: 24, // 减小左边距，为连接线预留更合适的空间
     marginBottom: 8,
-  },
-
-  // 连接线容器
-  connectionContainer: {
-    position: 'absolute',
-    left: -24,
-    top: 0,
-    bottom: 0,
-    width: 24,
-  },
-
-  // 垂直连线
-  verticalLine: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 1,
-    backgroundColor: '#e0e0e0',
-  },
-
-  // 水平连线
-  horizontalLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 20, // 与记录项中心对齐
-    height: 1,
-    backgroundColor: '#e0e0e0',
-  },
-
-  // 折叠按钮改进
-  collapseButton: {
-    position: 'absolute',
-    left: -8, // 居中于垂直线上
-    top: 12,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  collapseButtonText: {
-    fontSize: 14,
-    lineHeight: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginTop: -1, // 微调文字位置
   },
 
   // 记录项样式
@@ -583,12 +633,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f9fa',
     borderRadius: 8,
     padding: 12,
-    marginBottom: 8,
   },
   recordHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
+    alignItems: 'center',
+    gap: 8,
   },
 
   // 头像样式
@@ -713,7 +762,49 @@ const styles = StyleSheet.create({
 
   // 子记录容器样式
   childrenContainer: {
-    position: 'relative',
-    marginTop: -8, // 调整与父记录的间距
+    marginTop: 8,
+  },
+
+  // 更新折叠按钮样式
+  collapseButton: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  
+  collapseButtonText: {
+    fontSize: 16,
+    color: '#666',
+  },
+
+  // 感想相关样式
+  noteContainer: {
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  noteInput: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 4,
+    padding: 8,
+    minHeight: 60,
+    backgroundColor: '#fff',
+    fontSize: 14,
+    textAlignVertical: 'top',
+  },
+  noteDisplay: {
+    padding: 8,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 4,
+    minHeight: 40,
+  },
+  noteText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  notePlaceholder: {
+    fontSize: 14,
+    color: '#999',
+    fontStyle: 'italic',
   },
 }); 

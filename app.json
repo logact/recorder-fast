@@ -1,15 +1,31 @@
 {
   "expo": {
-    "name": "recorder-fast",
+    "name": "Voice Recorder",
     "slug": "recorder-fast",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
+    "scheme": "recorder",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.logact.recorderX",
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "audio",
+          "audio"
+        ],
+        "NSMicrophoneUsageDescription": "This app needs access to microphone to record voice.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to photo library to save recordings.",
+        "NSPhotoLibraryAddUsageDescription": "This app needs access to photo library to save recordings.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -36,6 +52,14 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "8a7d29c6-2463-4eb7-940e-bd8a51230d63"
+      }
     }
   }
 }
