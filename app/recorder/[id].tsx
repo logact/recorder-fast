@@ -245,7 +245,7 @@ export default function RecorderExecutionScreen() {
       time: 0,
       baseTime: 0,  // 初始化基础时间为0
       isRunning: false,
-      label: `Recording ${newId}`,
+      label: 'todo',  // Changed from `Recording ${newId}` to 'todo'
       children: [],
       parentId: parentId,
       isCollapsed: false,
