@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import storageService, { TimeRecord } from '@/services/storage/index';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
+import { Ionicons } from '@expo/vector-icons';
 
 
 // 使用与 [id].tsx 相同的 TimeRecord 接口
@@ -39,6 +40,30 @@ export default function Home() {
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
+  const handleAddRecorder = async () => {
+    const newId = Date.now().toString();
+    const existingRecords = await storageService.loadRecords();
+    
+    // Create new record
+    const newRecord = {
+      id: newId,
+      time: 0,
+      isRunning: false,
+      label: 'Todo...',
+      children: [],
+      parentId: null,
+      isCollapsed: false,
+      avatarColor: generateRandomColor(),
+      createdAt: new Date(),
+      isEditing: false,
+      baseTime: 0
+    };
+ 
+    await storageService.saveRecords([...existingRecords, newRecord]);
+    
+    // Navigate to recorder page
+    router.push(`/recorder/${newId}`);
+  };
 
   // 格式化日期
   const formatDate = (date: Date) => {
@@ -68,7 +93,21 @@ export default function Home() {
           }
           return record;
         };
-        setRootRecords(savedRecords.map(record => updateElapsedTime(record)));
+
+        // 更新运行中的记录时间
+        const updatedRecords = savedRecords.map(record => updateElapsedTime(record));
+
+        // 对记录进行排序
+        const sortedRecords = updatedRecords.sort((a, b) => {
+          // 首先按照运行状态排序（正在运行的排在前面）
+          if (a.isRunning && !b.isRunning) return -1;
+          if (!a.isRunning && b.isRunning) return 1;
+          
+          // 如果运行状态相同，按照创建时间排序（最新的排在前面）
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        });
+
+        setRootRecords(sortedRecords);
       };
 
       loadSavedRecords();
@@ -89,9 +128,21 @@ export default function Home() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
-            const updatedRecords = rootRecords.filter(record => record.id !== recordId);
-            await storageService.saveRecords(updatedRecords);
-            setRootRecords(updatedRecords);
+            try {
+              // 从存储中删除记录
+              await storageService.deleteRecord(recordId);
+              
+              // 更新本地状态
+              setRootRecords(prevRecords => 
+                prevRecords.filter(record => record.id !== recordId)
+              );
+            } catch (error) {
+              console.error('Error deleting record:', error);
+              Alert.alert(
+                "Error",
+                "Failed to delete the recording. Please try again."
+              );
+            }
           }
         }
       ]
@@ -181,6 +232,14 @@ export default function Home() {
           {rootRecords.map(record => renderRecordItem(record))}
         </View>
       </ScrollView>
+
+      {/* Floating Add Button */}
+      <TouchableOpacity 
+        style={styles.addButton}
+        onPress={handleAddRecorder}
+      >
+        <Ionicons name="add" size={32} color="#fff" />
+      </TouchableOpacity>
     </GestureHandlerRootView>
   );
 }
@@ -277,5 +336,24 @@ const styles = StyleSheet.create({
   },
   runningTime: {
     color: '#2196F3', // Blue color for running records
-  }
+  },
+  addButton: {
+    position: 'absolute',
+    bottom: 24,
+    alignSelf: 'center',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#2196F3',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
 });

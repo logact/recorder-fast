@@ -65,7 +65,7 @@ export default function RecorderExecutionScreen() {
         setTimeRecords([updatedRecord]);
       } else {
         // 如果找不到记录，返回首页
-        router.replace("/");
+        router.replace("/recorder/");
       }
     };
 
@@ -660,7 +660,7 @@ export default function RecorderExecutionScreen() {
     if (timeRecords.length > 0) {
       await storageService.saveRecord(timeRecords[0]);
     }
-    router.replace("/");
+    router.replace("/recorder/");
   }, [timeRecords]);
 
   // 渲染主界面
