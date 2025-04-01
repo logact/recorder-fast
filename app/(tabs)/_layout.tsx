@@ -2,6 +2,7 @@ import { Tabs } from 'expo-router';
 import React, { useState } from 'react';
 import { Platform, TouchableOpacity, Text, StyleSheet, Alert, TextInput } from 'react-native';
 import { router } from 'expo-router';
+import StorageService from '@/services/storage/index';
 
 import { HapticTab } from '@/components/HapticTab';
 import { IconSymbol } from '@/components/ui/IconSymbol';
@@ -15,37 +16,37 @@ export const recorderEvents = new EventEmitter();
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
-  const handleAddRecorder = () => {
-    // Show dialog with text input
-    Alert.prompt(
-      "New Recorder",
-      "Enter recorder name",
-      [
-        {
-          text: "Cancel",
-          style: "cancel"
-        },
-        {
-          text: "Create",
-          onPress: (name?: string) => {
-            if (name?.trim()) {
-              const newRecorder = {
-                id: Date.now().toString(),
-                title: name.trim(),
-                startTime: new Date().toLocaleString(),
-                endTime: '...',
-                totalTime: '0:00'
-              };
-              // Emit event to refresh list with new recorder
-              recorderEvents.emit('newRecorder', newRecorder);
-            }
-          }
-        }
-      ],
-      'plain-text',
-      '',
-      'default'
-    );
+  const handleAddRecorder = async () => {
+    const newId = Date.now().toString();
+    const existingRecords = await StorageService.loadRecords();
+    
+    // Create new record
+    const newRecord = {
+      id: newId,
+      time: 0,
+      isRunning: false,
+      label: `Recording ${newId}`,
+      children: [],
+      parentId: null,
+      isCollapsed: false,
+      avatarColor: generateRandomColor(),
+      createdAt: new Date(),
+      isEditing: false,
+      baseTime: 0
+    };
+ 
+    await StorageService.saveRecords([...existingRecords, newRecord]);
+    
+    // Navigate to recorder page
+    router.push(`/recorder/${newId}`);
+  };
+
+  const generateRandomColor = () => {
+    const colors = [
+      '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
+      '#FFEEAD', '#D4A5A5', '#9B59B6', '#3498DB'
+    ];
+    return colors[Math.floor(Math.random() * colors.length)];
   };
 
   return (

@@ -1,240 +1,281 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { FlatList, TouchableOpacity, View, Text, StyleSheet, Alert } from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  runOnJS,
-} from 'react-native-reanimated';
-import {
-  Gesture,
-  GestureDetector,
-  GestureHandlerRootView,
-} from 'react-native-gesture-handler';
-import { recorderEvents } from './_layout';
-import { router } from 'expo-router';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
+import { Stack, useRouter, useFocusEffect } from 'expo-router';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import storageService, { TimeRecord } from '@/services/storage/index';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import Swipeable from 'react-native-gesture-handler/Swipeable';
 
-type Recorder = {
-  id: string;
-  title: string;
-  startTime: string;
-  endTime: string;
-  totalTime: string;
-};
 
-interface RecorderItemProps {
-  item: Recorder;
-  onDelete: (id: string) => void;
-  onPress: (id: string) => void;
-}
+// 使用与 [id].tsx 相同的 TimeRecord 接口
 
-const RecorderItem: React.FC<RecorderItemProps> = React.memo(({ item, onDelete, onPress }) => {
-  const translateX = useSharedValue(0);
-  const itemHeight = useSharedValue(70);
-  const opacity = useSharedValue(1);
 
-  const panGesture = Gesture.Pan()
-    .onChange((event) => {
-      translateX.value = Math.min(0, translateX.value + event.changeX);
-    })
-    .onEnd(() => {
-      const SWIPE_THRESHOLD = -75;
-      if (translateX.value < SWIPE_THRESHOLD) {
-        translateX.value = withSpring(-100);
-      } else {
-        translateX.value = withSpring(0);
-      }
-    });
+export default function Home() {
+  const router = useRouter();
+  const [rootRecords, setRootRecords] = useState<TimeRecord[]>([]);
+  const swipeableRefs = useRef<{ [key: string]: Swipeable | null }>({});
+  const [currentTime, setCurrentTime] = useState<number>(Date.now());
 
-  const tapGesture = Gesture.Tap()
-    .onEnd((_event, success) => {
-      if (success) {
-        'worklet';
-        if (translateX.value === 0) {
-          runOnJS(onPress)(item.id);
-        }
-      }
-    });
-
-  const composedGestures = Gesture.Simultaneous(panGesture, tapGesture);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
-  }));
-
-  const deleteButtonStyle = useAnimatedStyle(() => ({
-    opacity: withSpring(translateX.value < -75 ? 1 : 0),
-  }));
-
-  // Optimize text rendering
-  const timeContainerStyle = [styles.timeContainer, styles.noFlicker];
-
-  return (
-    <GestureDetector gesture={composedGestures}>
-      <Animated.View style={[styles.itemContainer]}>
-        <Animated.View style={[styles.item, animatedStyle]}>
-          <Text style={styles.title}>{item.title}</Text>
-          <View style={timeContainerStyle}>
-            <Text style={[styles.timeText, styles.noFlicker]}>Start: {item.startTime}</Text>
-            <Text style={[styles.timeText, styles.noFlicker]}>End: {item.endTime}</Text>
-            <Text style={[styles.totalTime, styles.noFlicker]}>Total: {item.totalTime}</Text>
-          </View>
-        </Animated.View>
-        <Animated.View style={[styles.deleteButton, deleteButtonStyle]}>
-          <TouchableOpacity
-            onPress={() => {
-              Alert.alert(
-                "Delete Recorder",
-                "Are you sure you want to delete this recorder?",
-                [
-                  {
-                    text: "Cancel",
-                    style: "cancel"
-                  },
-                  {
-                    text: "Delete",
-                    style: "destructive",
-                    onPress: () => onDelete(item.id)
-                  }
-                ]
-              );
-            }}
-          >
-            <Text style={styles.deleteText}>Delete</Text>
-          </TouchableOpacity>
-        </Animated.View>
-      </Animated.View>
-    </GestureDetector>
-  );
-});
-
-const AnimatedText = Animated.createAnimatedComponent(Text);
-
-export default function RecorderListScreen() {
-  const [recorders, setRecorders] = useState<Recorder[]>([]);
-
+  // Update timer for running records
   useEffect(() => {
-    // Listen for new recorder events
-    const handleNewRecorder = (newRecorder: Recorder) => {
-      setRecorders(current => [newRecorder, ...current]);
-    };
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
 
-    recorderEvents.on('newRecorder', handleNewRecorder);
-
-    // Cleanup listener
-    return () => {
-      recorderEvents.off('newRecorder', handleNewRecorder);
-    };
+    return () => clearInterval(timer);
   }, []);
 
-  const handleRecorderPress = useCallback((id: string) => {
-    router.push(`/recorder/${id}`);
+  // Update records time calculation
+  const getUpdatedTime = useCallback((record: TimeRecord) => {
+    if (record.isRunning && record.startTime) {
+      const elapsedSeconds = Math.floor((Date.now() - record.startTime) / 1000);
+      return record.baseTime + elapsedSeconds;
+    }
+    return record.time || 0;
   }, []);
 
-  const handleDelete = useCallback((id: string) => {
-    setRecorders(current => current.filter(recorder => recorder.id !== id));
-  }, []);
-
-  const handleAddRecorder = () => {
-    // router.push('/new-recorder');
+  // 格式化时间
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
+
+  // 格式化日期
+  const formatDate = (date: Date) => {
+    return new Date(date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // 当页面获得焦点时重新加载记录
+  useFocusEffect(
+    useCallback(() => {
+      const loadSavedRecords = async () => {
+        const savedRecords = await storageService.loadRecords();
+        // Update elapsed time for running records
+        const updateElapsedTime = (record: TimeRecord): TimeRecord => {
+          if (record.isRunning && record.startTime) {
+            const now = Date.now();
+            const elapsedSeconds = Math.floor((now - record.startTime) / 1000);
+            return {
+              ...record,
+              time: record.baseTime + elapsedSeconds
+            };
+          }
+          return record;
+        };
+        setRootRecords(savedRecords.map(record => updateElapsedTime(record)));
+      };
+
+      loadSavedRecords();
+    }, [])
+  );
+
+  // Handle delete record
+  const handleDeleteRecord = async (recordId: string) => {
+    Alert.alert(
+      "Delete Recording",
+      "Are you sure you want to delete this recording?",
+      [
+        {
+          text: "Cancel",
+          style: "cancel"
+        },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const updatedRecords = rootRecords.filter(record => record.id !== recordId);
+            await storageService.saveRecords(updatedRecords);
+            setRootRecords(updatedRecords);
+          }
+        }
+      ]
+    );
+  };
+
+  // Render right actions (delete button)
+  const renderRightActions = (recordId: string) => {
+    return (
+      <TouchableOpacity
+        style={styles.deleteButton}
+        onPress={() => handleDeleteRecord(recordId)}
+      >
+        <Text style={styles.deleteButtonText}>Delete</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  // 渲染单个记录项
+  const renderRecordItem = (record: TimeRecord) => (
+    <Swipeable
+      key={record.id}
+      ref={ref => swipeableRefs.current[record.id] = ref}
+      renderRightActions={() => renderRightActions(record.id)}
+      onSwipeableOpen={() => {
+        // Close other open swipeables
+        Object.entries(swipeableRefs.current).forEach(([key, ref]) => {
+          if (key !== record.id && ref) {
+            ref.close();
+          }
+        });
+      }}
+    >
+      <TouchableOpacity
+        style={styles.recordItem}
+        onPress={() => router.push(`/recorder/${record.id}`)}
+      >
+        {/* 记录头部 */}
+        <View style={styles.recordHeader}>
+          {/* 头像 */}
+          <View style={[styles.avatar, { backgroundColor: record.avatarColor }]}>
+            <Text style={styles.avatarText}>
+              {record.label ? record.label.charAt(0).toUpperCase() : '#'}
+            </Text>
+          </View>
+
+          {/* 记录内容 */}
+          <View style={styles.recordContent}>
+            <View style={styles.titleRow}>
+              <View style={styles.titleAndDateContainer}>
+                <Text style={styles.recordLabel} numberOfLines={1}>
+                  {record.label}
+                </Text>
+                <Text style={styles.recordDate}>
+                  {formatDate(record.createdAt)}
+                </Text>
+              </View>
+              <Text style={[
+                styles.recordTime,
+                record.isRunning && styles.runningTime
+              ]}>
+                {formatTime(getUpdatedTime(record))}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </Swipeable>
+  );
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <FlatList
-        data={recorders}
-        renderItem={({ item }) => (
-          <RecorderItem
-            item={item}
-            onDelete={handleDelete}
-            onPress={handleRecorderPress}
-          />
-        )}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContainer}
+      <Stack.Screen
+        options={{
+          title: 'Voice Recorder',
+          headerShown: true,
+          headerBackVisible: false,
+        }}
       />
+
+      {/* Main content area */}
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollViewContent}
+      >
+        <View style={styles.recordsList}>
+          {rootRecords.map(record => renderRecordItem(record))}
+        </View>
+      </ScrollView>
     </GestureHandlerRootView>
   );
 }
 
+const generateRandomColor = () => {
+  const colors = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
+    '#FFEEAD', '#D4A5A5', '#9B59B6', '#3498DB'
+  ];
+  return colors[Math.floor(Math.random() * colors.length)];
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fff',
   },
-  listContainer: {
+  scrollView: {
+    flex: 1,
+  },
+  scrollViewContent: {
+    flexGrow: 1,
     padding: 16,
   },
-  itemContainer: {
-    position: 'relative',
-    marginBottom: 12,
+  recordsList: {
+    gap: 12,
   },
-  item: {
-    backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 16,
+  recordItem: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    padding: 12,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: 2,
+      height: 1,
     },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+    elevation: 2,
   },
-  title: {
+  recordHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarText: {
+    color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 8,
   },
-  timeContainer: {
-    gap: 4,
-    minHeight: 80,
+  recordContent: {
+    flex: 1,
   },
-  timeText: {
-    fontSize: 14,
-    color: '#666',
-    minWidth: 150,
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
-  totalTime: {
-    fontSize: 14,
+  titleAndDateContainer: {
+    flex: 1,
+    marginRight: 8,
+  },
+  recordLabel: {
+    fontSize: 16,
     fontWeight: '500',
-    color: '#333',
-    marginTop: 4,
-    minWidth: 150,
+    marginBottom: 4,
+  },
+  recordDate: {
+    fontSize: 12,
+    color: '#666',
+  },
+  recordTime: {
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   deleteButton: {
-    position: 'absolute',
-    right: 0,
+    backgroundColor: '#FF3B30',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 80,
     height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    backgroundColor: '#F44336',
-    borderTopRightRadius: 10,
-    borderBottomRightRadius: 10,
   },
-  deleteText: {
-    color: 'white',
+  deleteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
     fontWeight: '600',
   },
-  headerButton: {
-    marginRight: 16,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'red',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerButtonText: {
-    fontSize: 24,
-    color: '#ffffff',
-    fontWeight: '600',
-    lineHeight: 28,
-  },
-  noFlicker: {
-    backfaceVisibility: 'hidden',
-    transform: [{ perspective: 1000 }],
-  },
+  runningTime: {
+    color: '#2196F3', // Blue color for running records
+  }
 });

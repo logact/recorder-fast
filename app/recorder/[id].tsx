@@ -1,26 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, TextInput } from 'react-native';
 import { Stack, useLocalSearchParams, router } from 'expo-router';
-import { StorageService } from '../services/storage';
+import storageService from '../../services/storage/index';
+import { TimeRecord } from '../../services/storage/interfaces';
 
-/**
- * TimeRecord 接口定义了记录的数据结构
- * 采用树形结构设计，每个记录可以包含多个子记录
- */
-interface TimeRecord {
-  id: string;          // 记录的唯一标识符，用于操作和更新特定记录
-  time: number;        // 记录的计时时间，以秒为单位
-  isRunning: boolean;  // 标记当前记录是否正在计时
-  label: string;       // 记录的显示标题
-  children: TimeRecord[]; // 子记录列表，形成树形结构
-  parentId: string | null; // 父记录的ID，根记录为null
-  isCollapsed: boolean;   // 控制子记录的显示/隐藏状态
-  avatarColor: string;    // 记录图标的背景颜色
-  createdAt: Date;        // 记录的创建时间
-  isEditing?: boolean;    // 标记是否处于标题编辑状态
-  note?: string;          // 添加感想字段
-  isEditingNote?: boolean; // 标记是否处于感想编辑状态
-}
 
 /**
  * 生成随机颜色的辅助函数
@@ -52,29 +35,34 @@ export default function RecorderExecutionScreen() {
   const [timeRecords, setTimeRecords] = useState<TimeRecord[]>([]);
 
   /**
-   * 格式化时间的辅助函数
-   * 将秒数转换为 "分:秒" 格式
-   * @param seconds - 需要格式化的秒数
-   * @returns 格式化后的时间字符串，例如 "2:05"
-   */
-  const formatTime = useCallback((seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  }, []);
-
-  /**
    * 初始化根记录
    * 在组件首次加载时创建根记录
    */
   useEffect(() => {
     const initializeRecord = async () => {
-      // 加载现有记录
-      const existingRecords = await StorageService.loadRecords();
-      const existingRecord = existingRecords.find(record => record.id === id);
+      // 直接通过ID加载单条记录
+      const existingRecord = await storageService.loadRecord(id);
 
       if (existingRecord) {
-        setTimeRecords([existingRecord]);
+        // 递归更新所有记录的时间
+        const updateElapsedTime = (record: TimeRecord): TimeRecord => {
+          if (record.isRunning && record.startTime) {
+            const now = Date.now();
+            const elapsedSeconds = Math.floor((now - record.startTime) / 1000);
+            return {
+              ...record,
+              time: record.baseTime + elapsedSeconds,
+              children: record.children.map(child => updateElapsedTime(child))
+            };
+          }
+          return {
+            ...record,
+            children: record.children.map(child => updateElapsedTime(child))
+          };
+        };
+
+        const updatedRecord = updateElapsedTime(existingRecord);
+        setTimeRecords([updatedRecord]);
       } else {
         // 如果找不到记录，返回首页
         router.replace("/");
@@ -90,37 +78,61 @@ export default function RecorderExecutionScreen() {
    */
   useEffect(() => {
     let interval: NodeJS.Timeout;
+    let lastUpdateTime = Date.now();
     
-    const updateTimes = async () => {
+    const updateTimes = () => {
+      const now = Date.now();
+      const deltaTime = now - lastUpdateTime;
+      lastUpdateTime = now;
+
       setTimeRecords(prev => {
         // 递归更新记录树中的时间
-        const updateRecordTime = (records: TimeRecord[]): TimeRecord[] => {
-          return records.map(record => ({
+        const updateRecordTime = (record: TimeRecord): TimeRecord => {
+          if (record.isRunning && record.startTime) {
+            const elapsedSeconds = Math.floor((now - record.startTime) / 1000);
+            return {
+              ...record,
+              time: record.baseTime + elapsedSeconds,
+              children: record.children.map(child => updateRecordTime(child))
+            };
+          }
+          return {
             ...record,
-            time: record.isRunning ? record.time + 1 : record.time,
-            children: record.children.length > 0 ? updateRecordTime(record.children) : record.children
-          }));
+            children: record.children.map(child => updateRecordTime(child))
+          };
         };
 
-        const updatedRecords = updateRecordTime(prev);
-
-        // 保存更新后的记录
-        const saveUpdatedRecords = async () => {
-          const allRecords = await StorageService.loadRecords();
-          const updatedAllRecords = allRecords.map(record => 
-            record.id === id ? updatedRecords[0] : record
-          );
-          await StorageService.saveRecords(updatedAllRecords);
-        };
-        saveUpdatedRecords();
-
+        const updatedRecords = prev.map(record => updateRecordTime(record));
         return updatedRecords;
       });
     };
 
-    interval = setInterval(updateTimes, 1000);
-    return () => clearInterval(interval);
-  }, [id]);
+    // 使用 requestAnimationFrame 来实现更平滑的更新
+    let animationFrameId: number;
+    const animate = () => {
+      updateTimes();
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animate();
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, []);
+
+  /**
+   * 格式化时间的辅助函数
+   * 将秒数转换为 "分:秒" 格式，添加平滑过渡效果
+   * @param seconds - 需要格式化的秒数
+   * @returns 格式化后的时间字符串，例如 "2:05"
+   */
+  const formatTime = useCallback((seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }, []);
 
   /**
    * 切换记录的运行状态
@@ -129,8 +141,7 @@ export default function RecorderExecutionScreen() {
    * @param recordId - 要切换状态的记录ID
    */
   const toggleRecord = useCallback(async (recordId: string) => {
-    // 加载所有记录
-    const allRecords = await StorageService.loadRecords();
+    const now = Date.now();
 
     // 递归更新记录树中的执行状态
     const updateRecordStatus = (records: TimeRecord[]): TimeRecord[] => {
@@ -141,18 +152,31 @@ export default function RecorderExecutionScreen() {
         if (record.id === recordId) {
           // 更新当前记录的状态
           const newIsRunning = !record.isRunning;
-          return {
+          const updatedRecord = {
             ...record,
             isRunning: newIsRunning,
-            children: newIsRunning 
-              ? record.children 
-              : updateChildrenStatus(record.children, false)
+            children: newIsRunning ? record.children : updateChildrenStatus(record.children, false)
           };
+
+          if (newIsRunning) {
+            // 开始计时：记录开始时间和基础时间
+            updatedRecord.startTime = now;
+            updatedRecord.baseTime = record.time || 0;
+          } else {
+            // 停止计时：更新基础时间，清除开始时间
+            const elapsedSeconds = Math.floor((now - (record.startTime || now)) / 1000);
+            updatedRecord.baseTime = (record.baseTime || 0) + elapsedSeconds;
+            updatedRecord.startTime = undefined;
+            updatedRecord.time = updatedRecord.baseTime;
+          }
+          return updatedRecord;
         } else if (hasTargetInLevel) {
           // 如果目标记录在当前层级，暂停其他同级记录
           return {
             ...record,
             isRunning: false,
+            startTime: undefined,
+            time: record.baseTime || 0,
             children: updateChildrenStatus(record.children, false)
           };
         } else if (record.children.length > 0) {
@@ -164,6 +188,8 @@ export default function RecorderExecutionScreen() {
             return {
               ...record,
               isRunning: targetChild.isRunning,
+              startTime: targetChild.isRunning ? now : undefined,
+              baseTime: record.time || 0,
               children: updatedChildren
             };
           }
@@ -198,14 +224,13 @@ export default function RecorderExecutionScreen() {
     };
 
     // 更新当前显示的记录
-    setTimeRecords(prev => updateRecordStatus(prev));
-
-    // 在所有记录中找到并更新当前记录树
-    const updatedRecords = allRecords.map(record => 
-      record.id === id ? timeRecords[0] : record
-    );
-    await StorageService.saveRecords(updatedRecords);
-  }, [id, timeRecords]);
+    setTimeRecords(prev => {
+      const updatedRecords = updateRecordStatus(prev);
+      // 直接保存更新后的记录
+      storageService.saveRecord(updatedRecords[0]);
+      return updatedRecords;
+    });
+  }, [id]);
 
   /**
    * 添加新记录
@@ -214,11 +239,11 @@ export default function RecorderExecutionScreen() {
    */
   const addNewRecord = useCallback(async (parentId: string | null) => {
     const newId = Date.now().toString();
-    const allRecords = await StorageService.loadRecords();
 
     const newRecord: TimeRecord = {
       id: newId,
       time: 0,
+      baseTime: 0,  // 初始化基础时间为0
       isRunning: false,
       label: `Recording ${newId}`,
       children: [],
@@ -231,7 +256,7 @@ export default function RecorderExecutionScreen() {
       isEditingNote: false,
     };
 
-    // 递归更新记录及其子记录
+    // 递归更新记录树中的添加操作
     const updateRecordTree = (records: TimeRecord[]): TimeRecord[] => {
       return records.map(record => {
         if (record.id === parentId) {
@@ -261,10 +286,14 @@ export default function RecorderExecutionScreen() {
       return updateRecordTree(prev);
     });
 
-    // 更新存储中的所有记录
-    const updatedRecords = updateRecordTree(allRecords);
-    await StorageService.saveRecords(updatedRecords);
-  }, []);
+    // 如果是添加到根记录，直接保存新记录
+    if (parentId === null) {
+      await storageService.saveRecord(newRecord);
+    } else {
+      // 如果是添加子记录，只保存当前记录
+      await storageService.saveRecord(timeRecords[0]);
+    }
+  }, [timeRecords]);
 
   /**
    * 切换记录的折叠状态
@@ -290,7 +319,7 @@ export default function RecorderExecutionScreen() {
       const newRecords = updateCollapse(prev);
       
       // 保存更新后的记录
-      StorageService.saveRecords(newRecords);
+      storageService.saveRecord(newRecords[0]);
       return newRecords;
     });
   }, []);
@@ -320,7 +349,7 @@ export default function RecorderExecutionScreen() {
       const newRecords = updateLabel(prev);
       
       // 保存更新后的记录
-      StorageService.saveRecords(newRecords);
+      storageService.saveRecord(newRecords[0]);
       return newRecords;
     });
   }, []);
@@ -474,24 +503,52 @@ export default function RecorderExecutionScreen() {
                   placeholder="Add your thoughts..."
                   multiline
                   autoFocus
+                  blurOnSubmit={true}
                   onBlur={() => {
-                    setTimeRecords(prev => {
-                      const updateNote = (records: TimeRecord[]): TimeRecord[] => {
-                        return records.map(record => {
-                          if (record.id === item.id) {
-                            return { ...record, isEditingNote: false };
-                          }
-                          return {
-                            ...record,
-                            children: updateNote(record.children)
-                          };
-                        });
-                      };
-                      const newRecords = updateNote(prev);
-                      // 保存更新后的记录
-                      StorageService.saveRecords(newRecords);
-                      return newRecords;
-                    });
+                    // 创建一个保存并退出编辑状态的函数
+                    const saveAndExitEdit = () => {
+                      setTimeRecords(prev => {
+                        const updateNote = (records: TimeRecord[]): TimeRecord[] => {
+                          return records.map(record => {
+                            if (record.id === item.id) {
+                              return { ...record, isEditingNote: false };
+                            }
+                            return {
+                              ...record,
+                              children: updateNote(record.children)
+                            };
+                          });
+                        };
+                        const newRecords = updateNote(prev);
+                        // 保存更新后的记录
+                        storageService.saveRecord(newRecords[0]);
+                        return newRecords;
+                      });
+                    };
+                    saveAndExitEdit();
+                  }}
+                  onSubmitEditing={() => {
+                    // 在提交时也调用相同的保存和退出编辑状态的逻辑
+                    const saveAndExitEdit = () => {
+                      setTimeRecords(prev => {
+                        const updateNote = (records: TimeRecord[]): TimeRecord[] => {
+                          return records.map(record => {
+                            if (record.id === item.id) {
+                              return { ...record, isEditingNote: false };
+                            }
+                            return {
+                              ...record,
+                              children: updateNote(record.children)
+                            };
+                          });
+                        };
+                        const newRecords = updateNote(prev);
+                        // 保存更新后的记录
+                        storageService.saveRecord(newRecords[0]);
+                        return newRecords;
+                      });
+                    };
+                    saveAndExitEdit();
                   }}
                 />
               ) : (
@@ -529,7 +586,53 @@ export default function RecorderExecutionScreen() {
                 style={styles.addButton}
                 onPress={() => addNewRecord(item.id)}
               >
-                <Text style={styles.addButtonText}>...</Text>
+                <Text style={styles.addButtonText}>+</Text>
+              </TouchableOpacity>
+
+              {/* 添加休息按钮 */}
+              <TouchableOpacity 
+                style={[styles.addButton, styles.breakButton]}
+                onPress={() => {
+                  const newId = Date.now().toString();
+                  const newRecord: TimeRecord = {
+                    id: newId,
+                    time: 0,
+                    baseTime: 0,  // 初始化基础时间为0
+                    isRunning: false,
+                    label: 'Break',
+                    children: [],
+                    parentId: item.id,
+                    isCollapsed: false,
+                    avatarColor: '#FFB6C1', // 使用柔和的粉色作为休息记录的标识色
+                    createdAt: new Date(),
+                    isEditing: false,
+                    note: '',
+                    isEditingNote: false,
+                  };
+
+                  setTimeRecords(prev => {
+                    const updateRecordTree = (records: TimeRecord[]): TimeRecord[] => {
+                      return records.map(record => {
+                        if (record.id === item.id) {
+                          return {
+                            ...record,
+                            children: [...record.children, newRecord]
+                          };
+                        }
+                        return {
+                          ...record,
+                          children: updateRecordTree(record.children)
+                        };
+                      });
+                    };
+                    const newRecords = updateRecordTree(prev);
+                    // 保存更新后的记录
+                    storageService.saveRecord(newRecords[0]);
+                    return newRecords;
+                  });
+                }}
+              >
+                <Text style={styles.addButtonText}>☕</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -551,6 +654,15 @@ export default function RecorderExecutionScreen() {
     </View>
   );
 
+  // 修改返回按钮的处理函数
+  const handleBack = useCallback(async () => {
+    // 保存当前记录状态
+    if (timeRecords.length > 0) {
+      await storageService.saveRecord(timeRecords[0]);
+    }
+    router.replace("/");
+  }, [timeRecords]);
+
   // 渲染主界面
   return (
     <View style={styles.container}>
@@ -561,9 +673,7 @@ export default function RecorderExecutionScreen() {
           headerShown: true,
           headerLeft: () => (
             <TouchableOpacity 
-              onPress={() => {
-                router.replace("/");
-              }}
+              onPress={handleBack}
               style={styles.headerButton}
             >
               <Text style={styles.headerButtonText}>Back</Text>
@@ -806,5 +916,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#999',
     fontStyle: 'italic',
+  },
+
+  breakButton: {
+    backgroundColor: '#FFF0F5', // 使用柔和的粉色背景
   },
 }); 

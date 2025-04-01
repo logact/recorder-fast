@@ -31,7 +31,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.logact.recorderX"
     },
     "web": {
       "bundler": "metro",
