@@ -325,4 +325,118 @@ git checkout -b "update/recorder"
 git checkout -b "feature/voice-recording"
 git checkout -b "bugfix/audio-playback"
 git checkout -b "hotfix/critical-security"
-``` 
+```
+
+## 7. 提交信息换行技巧
+
+### 7.1 使用多个 -m 参数
+```bash
+git commit -m "feat(recorder): add new feature" \
+          -m "- Add component A" \
+          -m "- Add component B" \
+          -m "- Update documentation" \
+          -m "Closes #123"
+```
+
+### 7.2 使用编辑器模式
+```bash
+# 直接进入编辑器模式
+git commit
+
+# 或者指定编辑器
+git commit -e
+```
+
+在编辑器模式中，你可以：
+1. 自由编辑多行文本
+2. 使用空行分隔不同部分
+3. 保存并退出编辑器完成提交
+
+### 7.3 示例
+```
+feat(recorder): implement new recording feature
+
+- Add new recording component
+- Implement audio processing
+- Add error handling
+
+- Update documentation
+- Add unit tests
+
+Closes #123
+```
+
+注意：
+- 第一行是标题，不要超过 50 个字符
+- 使用空行分隔标题和正文
+- 正文中的每个要点可以单独一行
+- 使用空行分隔正文和页脚 
+
+## 8. 编辑器模式详细指南
+
+### 8.1 基本使用
+```bash
+# 直接进入编辑器模式
+git commit
+
+# 指定编辑器
+git commit -e
+
+# 设置默认编辑器
+export EDITOR=code  # 使用 VS Code
+export EDITOR=nano  # 使用 Nano
+export EDITOR=vim   # 使用 Vim
+```
+
+### 8.2 编辑器操作指南
+
+#### 8.2.1 Vim 编辑器
+- `i` 进入插入模式
+- `Esc` 退出插入模式
+- `:wq` 保存并退出
+- `:q!` 不保存退出
+
+#### 8.2.2 Nano 编辑器
+- `Ctrl + X` 退出
+- `Ctrl + O` 保存
+- `Ctrl + K` 剪切行
+- `Ctrl + U` 粘贴
+
+#### 8.2.3 VS Code
+- `Cmd/Ctrl + S` 保存
+- `Cmd/Ctrl + W` 关闭窗口
+
+### 8.3 完整操作流程
+```bash
+# 1. 添加要提交的文件
+git add .
+
+# 2. 进入编辑器模式
+git commit
+
+# 3. 在编辑器中输入提交信息
+feat(recorder): add new recording feature
+
+- Add new recording component
+- Implement audio processing
+- Add error handling
+
+Closes #123
+
+# 4. 保存并退出编辑器
+```
+
+### 8.4 编辑器模式的优势
+- 可以自由编辑多行文本
+- 可以预览完整的提交信息
+- 可以方便地修改和调整
+- 支持语法高亮（取决于编辑器）
+- 可以复制粘贴已有文本
+- 可以使用编辑器的所有功能
+
+### 8.5 注意事项
+- 确保编辑器正确配置
+- 熟悉所用编辑器的基本操作
+- 保存前检查提交信息格式
+- 确保所有必要信息都已包含
+- 注意提交信息的长度限制 
