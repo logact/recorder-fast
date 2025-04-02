@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, TextInput } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { Stack, useLocalSearchParams, router } from 'expo-router';
 import storageService from '../../services/storage/index';
 import { TimeRecord } from '../../services/storage/interfaces';
@@ -33,6 +33,12 @@ export default function RecorderExecutionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   // 使用状态钩子管理记录列表
   const [timeRecords, setTimeRecords] = useState<TimeRecord[]>([]);
+  // 添加 ScrollView 的 ref
+  const scrollViewRef = useRef<ScrollView>(null);
+  // 添加当前正在编辑的记录ID状态
+  const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
+  // 添加记录视图引用的映射
+  const recordRefs = useRef<{ [key: string]: View | null }>({});
 
   /**
    * 初始化根记录
@@ -369,6 +375,61 @@ export default function RecorderExecutionScreen() {
     });
   };
 
+  // 添加滚动到编辑记录的函数
+  const scrollToEditingRecord = useCallback((recordId: string) => {
+    if (scrollViewRef.current && recordRefs.current[recordId]) {
+      // 使用 setTimeout 确保在键盘弹出后执行滚动
+      setTimeout(() => {
+        recordRefs.current[recordId]?.measure((x, y, width, height, pageX, pageY) => {
+          scrollViewRef.current?.scrollTo({
+            y: pageY - 200, // 增加滚动距离到 200
+            animated: true
+          });
+        });
+      }, 300); // 增加延迟以确保键盘完全弹出
+    }
+  }, []);
+
+  // 修改开始编辑记录的处理函数
+  const startEditingRecord = useCallback((recordId: string) => {
+    setEditingRecordId(recordId);
+    setTimeRecords(prev => {
+      const updateEditing = (records: TimeRecord[]): TimeRecord[] => {
+        return records.map(record => {
+          if (record.id === recordId) {
+            return { ...record, isEditing: true };
+          }
+          return {
+            ...record,
+            children: updateEditing(record.children)
+          };
+        });
+      };
+      return updateEditing(prev);
+    });
+    scrollToEditingRecord(recordId);
+  }, [scrollToEditingRecord]);
+
+  // 修改开始编辑笔记的处理函数
+  const startEditingNote = useCallback((recordId: string) => {
+    setEditingRecordId(recordId);
+    setTimeRecords(prev => {
+      const updateEditingNote = (records: TimeRecord[]): TimeRecord[] => {
+        return records.map(record => {
+          if (record.id === recordId) {
+            return { ...record, isEditingNote: true };
+          }
+          return {
+            ...record,
+            children: updateEditingNote(record.children)
+          };
+        });
+      };
+      return updateEditingNote(prev);
+    });
+    scrollToEditingRecord(recordId);
+  }, [scrollToEditingRecord]);
+
   /**
    * 渲染单个时间记录
    * 包括记录内容和子记录
@@ -382,7 +443,12 @@ export default function RecorderExecutionScreen() {
     depth?: number;
     isLastChild?: boolean;
   }) => (
-    <View key={item.id} style={styles.recordContainer}>
+    <View 
+      key={item.id} 
+      ref={ref => recordRefs.current[item.id] = ref}
+      style={styles.recordContainer}
+      collapsable={false}
+    >
       <View style={[styles.recordItem, { marginLeft: depth * 24 }]}>
         <View style={styles.recordHeader}>
           {/* 折叠按钮移到这里 */}
@@ -408,22 +474,7 @@ export default function RecorderExecutionScreen() {
           <View style={styles.recordContent}>
             {/* 标题部分（可编辑） */}
             <TouchableOpacity 
-              onPress={() => {
-                setTimeRecords(prev => {
-                  const updateEditing = (records: TimeRecord[]): TimeRecord[] => {
-                    return records.map(record => {
-                      if (record.id === item.id) {
-                        return { ...record, isEditing: true };
-                      }
-                      return {
-                        ...record,
-                        children: updateEditing(record.children)
-                      };
-                    });
-                  };
-                  return updateEditing(prev);
-                });
-              }}
+              onPress={() => startEditingRecord(item.id)}
             >
               {item.isEditing ? (
                 <TextInput
@@ -463,22 +514,7 @@ export default function RecorderExecutionScreen() {
             {/* 添加感想部分 */}
             <TouchableOpacity 
               style={styles.noteContainer}
-              onPress={() => {
-                setTimeRecords(prev => {
-                  const updateEditingNote = (records: TimeRecord[]): TimeRecord[] => {
-                    return records.map(record => {
-                      if (record.id === item.id) {
-                        return { ...record, isEditingNote: true };
-                      }
-                      return {
-                        ...record,
-                        children: updateEditingNote(record.children)
-                      };
-                    });
-                  };
-                  return updateEditingNote(prev);
-                });
-              }}
+              onPress={() => startEditingNote(item.id)}
             >
               {item.isEditingNote ? (
                 <TextInput
@@ -665,35 +701,43 @@ export default function RecorderExecutionScreen() {
 
   // 渲染主界面
   return (
-    <View style={styles.container}>
-      {/* 页面头部 */}
-      <Stack.Screen
-        options={{
-          title: 'Voice Recorder',
-          headerShown: true,
-          headerLeft: () => (
-            <TouchableOpacity 
-              onPress={handleBack}
-              style={styles.headerButton}
-            >
-              <Text style={styles.headerButtonText}>Back</Text>
-            </TouchableOpacity>
-          ),
-        }}
-      />
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 50} // 增加偏移量
+    >
+      <View style={styles.container}>
+        {/* 页面头部 */}
+        <Stack.Screen
+          options={{
+            title: 'Voice Recorder',
+            headerShown: true,
+            headerLeft: () => (
+              <TouchableOpacity 
+                onPress={handleBack}
+                style={styles.headerButton}
+              >
+                <Text style={styles.headerButtonText}>Back</Text>
+              </TouchableOpacity>
+            ),
+          }}
+        />
 
-      {/* 记录列表滚动区域 */}
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollViewContent}
-      >
-        <View style={styles.content}>
-          <View style={styles.recordsList}>
-            {timeRecords.map(record => renderTimeRecord({ item: record }))}
+        {/* 记录列表滚动区域 */}
+        <ScrollView 
+          ref={scrollViewRef}
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollViewContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.content}>
+            <View style={styles.recordsList}>
+              {timeRecords.map(record => renderTimeRecord({ item: record }))}
+            </View>
           </View>
-        </View>
-      </ScrollView>
-    </View>
+        </ScrollView>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
