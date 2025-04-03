@@ -19,6 +19,8 @@
       "infoPlist": {
         "UIBackgroundModes": [
           "audio",
+          "audio",
+          "audio",
           "audio"
         ],
         "NSMicrophoneUsageDescription": "This app needs access to microphone to record voice.",
@@ -61,6 +63,12 @@
       "eas": {
         "projectId": "8a7d29c6-2463-4eb7-940e-bd8a51230d63"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/8a7d29c6-2463-4eb7-940e-bd8a51230d63"
     }
   }
 }

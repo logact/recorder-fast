@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, TextIn
 import { Stack, useLocalSearchParams, router } from 'expo-router';
 import storageService from '../../services/storage/index';
 import { TimeRecord } from '../../services/storage/interfaces';
+import { useKeepAwake } from 'expo-keep-awake';
 
 
 /**
@@ -83,7 +84,6 @@ export default function RecorderExecutionScreen() {
    * 每秒更新所有正在运行的记录的时间
    */
   useEffect(() => {
-    let interval: NodeJS.Timeout;
     let lastUpdateTime = Date.now();
     
     const updateTimes = () => {
@@ -98,7 +98,7 @@ export default function RecorderExecutionScreen() {
             const elapsedSeconds = Math.floor((now - record.startTime) / 1000);
             return {
               ...record,
-              time: record.baseTime + elapsedSeconds,
+              time: (record.baseTime || 0) + elapsedSeconds,
               children: record.children.map(child => updateRecordTime(child))
             };
           }
@@ -113,30 +113,31 @@ export default function RecorderExecutionScreen() {
       });
     };
 
-    // 使用 requestAnimationFrame 来实现更平滑的更新
-    let animationFrameId: number;
-    const animate = () => {
-      updateTimes();
-      animationFrameId = requestAnimationFrame(animate);
-    };
+    // 使用 setInterval 来确保每秒更新一次
+    const intervalId = setInterval(updateTimes, 1000);
+    
+    // 立即执行一次更新
+    updateTimes();
 
-    animate();
     return () => {
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
-      }
+      clearInterval(intervalId);
     };
   }, []);
 
   /**
    * 格式化时间的辅助函数
-   * 将秒数转换为 "分:秒" 格式，添加平滑过渡效果
+   * 将秒数转换为 "时:分:秒" 格式
    * @param seconds - 需要格式化的秒数
-   * @returns 格式化后的时间字符串，例如 "2:05"
+   * @returns 格式化后的时间字符串，例如 "1:23:45"
    */
   const formatTime = useCallback((seconds: number) => {
-    const mins = Math.floor(seconds / 60);
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+      return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   }, []);
 
@@ -442,253 +443,264 @@ export default function RecorderExecutionScreen() {
     item: TimeRecord;
     depth?: number;
     isLastChild?: boolean;
-  }) => (
-    <View 
-      key={item.id} 
-      ref={ref => recordRefs.current[item.id] = ref}
-      style={styles.recordContainer}
-      collapsable={false}
-    >
-      <View style={[styles.recordItem, { marginLeft: depth * 24 }]}>
-        <View style={styles.recordHeader}>
-          {/* 折叠按钮移到这里 */}
-          {item.children.length > 0 && (
-            <TouchableOpacity 
-              style={styles.collapseButton}
-              onPress={() => toggleCollapse(item.id)}
-            >
-              <Text style={styles.collapseButtonText}>
-                {item.isCollapsed ? '▸' : '▾'}
+  }) => {
+    // 计算当前时间
+    const getCurrentTime = (record: TimeRecord) => {
+      if (record.isRunning && record.startTime) {
+        const elapsedSeconds = Math.floor((Date.now() - record.startTime) / 1000);
+        return (record.baseTime || 0) + elapsedSeconds;
+      }
+      return record.time || 0;
+    };
+
+    return (
+      <View 
+        key={item.id} 
+        ref={ref => recordRefs.current[item.id] = ref}
+        style={styles.recordContainer}
+        collapsable={false}
+      >
+        <View style={[styles.recordItem, { marginLeft: depth * 24 }]}>
+          <View style={styles.recordHeader}>
+            {/* 折叠按钮移到这里 */}
+            {item.children.length > 0 && (
+              <TouchableOpacity 
+                style={styles.collapseButton}
+                onPress={() => toggleCollapse(item.id)}
+              >
+                <Text style={styles.collapseButtonText}>
+                  {item.isCollapsed ? '▸' : '▾'}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* 头像 */}
+            <View style={[styles.avatar, { backgroundColor: item.avatarColor }]}>
+              <Text style={styles.avatarText}>
+                {item.label ? item.label.charAt(0).toUpperCase() : '#'}
               </Text>
-            </TouchableOpacity>
-          )}
+            </View>
 
-          {/* 头像 */}
-          <View style={[styles.avatar, { backgroundColor: item.avatarColor }]}>
-            <Text style={styles.avatarText}>
-              {item.label ? item.label.charAt(0).toUpperCase() : '#'}
-            </Text>
-          </View>
-
-          {/* 记录内容 */}
-          <View style={styles.recordContent}>
-            {/* 标题部分（可编辑） */}
-            <TouchableOpacity 
-              onPress={() => startEditingRecord(item.id)}
-            >
-              {item.isEditing ? (
-                <TextInput
-                  style={styles.labelInput}
-                  value={item.label}
-                  onChangeText={(text) => {
-                    setTimeRecords(prev => {
-                      const updateLabel = (records: TimeRecord[]): TimeRecord[] => {
-                        return records.map(record => {
-                          if (record.id === item.id) {
-                            return { ...record, label: text };
-                          }
-                          return {
-                            ...record,
-                            children: updateLabel(record.children)
-                          };
-                        });
-                      };
-                      return updateLabel(prev);
-                    });
-                  }}
-                  placeholder="Enter title..."
-                  autoFocus
-                  onBlur={() => updateRecordLabel(item.id, item.label || `Recording ${item.id}`)}
-                />
-              ) : (
-                <View style={styles.titleRow}>
-                  <View style={styles.titleAndDateContainer}>
-                    <Text style={styles.recordLabel} numberOfLines={1}>{item.label}</Text>
-                    <Text style={styles.recordDate}>{formatDate(item.createdAt)}</Text>
-                  </View>
-                  <Text style={styles.recordTime}>{formatTime(item.time)}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-
-            {/* 添加感想部分 */}
-            <TouchableOpacity 
-              style={styles.noteContainer}
-              onPress={() => startEditingNote(item.id)}
-            >
-              {item.isEditingNote ? (
-                <TextInput
-                  style={styles.noteInput}
-                  value={item.note}
-                  onChangeText={(text) => {
-                    setTimeRecords(prev => {
-                      const updateNote = (records: TimeRecord[]): TimeRecord[] => {
-                        return records.map(record => {
-                          if (record.id === item.id) {
-                            return { ...record, note: text };
-                          }
-                          return {
-                            ...record,
-                            children: updateNote(record.children)
-                          };
-                        });
-                      };
-                      return updateNote(prev);
-                    });
-                  }}
-                  placeholder="Add your thoughts..."
-                  multiline
-                  autoFocus
-                  blurOnSubmit={true}
-                  onBlur={() => {
-                    // 创建一个保存并退出编辑状态的函数
-                    const saveAndExitEdit = () => {
-                      setTimeRecords(prev => {
-                        const updateNote = (records: TimeRecord[]): TimeRecord[] => {
-                          return records.map(record => {
-                            if (record.id === item.id) {
-                              return { ...record, isEditingNote: false };
-                            }
-                            return {
-                              ...record,
-                              children: updateNote(record.children)
-                            };
-                          });
-                        };
-                        const newRecords = updateNote(prev);
-                        // 保存更新后的记录
-                        storageService.saveRecord(newRecords[0]);
-                        return newRecords;
-                      });
-                    };
-                    saveAndExitEdit();
-                  }}
-                  onSubmitEditing={() => {
-                    // 在提交时也调用相同的保存和退出编辑状态的逻辑
-                    const saveAndExitEdit = () => {
-                      setTimeRecords(prev => {
-                        const updateNote = (records: TimeRecord[]): TimeRecord[] => {
-                          return records.map(record => {
-                            if (record.id === item.id) {
-                              return { ...record, isEditingNote: false };
-                            }
-                            return {
-                              ...record,
-                              children: updateNote(record.children)
-                            };
-                          });
-                        };
-                        const newRecords = updateNote(prev);
-                        // 保存更新后的记录
-                        storageService.saveRecord(newRecords[0]);
-                        return newRecords;
-                      });
-                    };
-                    saveAndExitEdit();
-                  }}
-                />
-              ) : (
-                <View style={styles.noteDisplay}>
-                  {item.note ? (
-                    <Text style={styles.noteText}>{item.note}</Text>
-                  ) : (
-                    <Text style={styles.notePlaceholder}>Add note...</Text>
-                  )}
-                </View>
-              )}
-            </TouchableOpacity>
-
-            {/* 操作按钮 */}
-            <View style={styles.actionRow}>
-              {/* 播放/暂停按钮 */}
+            {/* 记录内容 */}
+            <View style={styles.recordContent}>
+              {/* 标题部分（可编辑） */}
               <TouchableOpacity 
-                style={[styles.controlButton, item.isRunning && styles.runningButton]}
-                onPress={() => toggleRecord(item.id)}
+                onPress={() => startEditingRecord(item.id)}
               >
-                <View style={styles.controlButtonInner}>
-                  {item.isRunning ? (
-                    <View style={styles.pauseIcon}>
-                      <View style={styles.pauseBar} />
-                      <View style={styles.pauseBar} />
+                {item.isEditing ? (
+                  <TextInput
+                    style={styles.labelInput}
+                    value={item.label}
+                    onChangeText={(text) => {
+                      setTimeRecords(prev => {
+                        const updateLabel = (records: TimeRecord[]): TimeRecord[] => {
+                          return records.map(record => {
+                            if (record.id === item.id) {
+                              return { ...record, label: text };
+                            }
+                            return {
+                              ...record,
+                              children: updateLabel(record.children)
+                            };
+                          });
+                        };
+                        return updateLabel(prev);
+                      });
+                    }}
+                    placeholder="Enter title..."
+                    autoFocus
+                    onBlur={() => updateRecordLabel(item.id, item.label || `Recording ${item.id}`)}
+                  />
+                ) : (
+                  <View style={styles.titleRow}>
+                    <View style={styles.titleAndDateContainer}>
+                      <Text style={styles.recordLabel} numberOfLines={1}>{item.label}</Text>
+                      <Text style={styles.recordDate}>{formatDate(item.createdAt)}</Text>
                     </View>
-                  ) : (
-                    <View style={styles.playIcon} />
-                  )}
-                </View>
+                    <Text style={styles.recordTime}>{formatTime(getCurrentTime(item))}</Text>
+                  </View>
+                )}
               </TouchableOpacity>
-              
-              {/* 添加子记录按钮 */}
+
+              {/* 添加感想部分 */}
               <TouchableOpacity 
-                style={styles.addButton}
-                onPress={() => addNewRecord(item.id)}
+                style={styles.noteContainer}
+                onPress={() => startEditingNote(item.id)}
               >
-                <Text style={styles.addButtonText}>+</Text>
+                {item.isEditingNote ? (
+                  <TextInput
+                    style={styles.noteInput}
+                    value={item.note}
+                    onChangeText={(text) => {
+                      setTimeRecords(prev => {
+                        const updateNote = (records: TimeRecord[]): TimeRecord[] => {
+                          return records.map(record => {
+                            if (record.id === item.id) {
+                              return { ...record, note: text };
+                            }
+                            return {
+                              ...record,
+                              children: updateNote(record.children)
+                            };
+                          });
+                        };
+                        return updateNote(prev);
+                      });
+                    }}
+                    placeholder="Add your thoughts..."
+                    multiline
+                    autoFocus
+                    blurOnSubmit={true}
+                    onBlur={() => {
+                      // 创建一个保存并退出编辑状态的函数
+                      const saveAndExitEdit = () => {
+                        setTimeRecords(prev => {
+                          const updateNote = (records: TimeRecord[]): TimeRecord[] => {
+                            return records.map(record => {
+                              if (record.id === item.id) {
+                                return { ...record, isEditingNote: false };
+                              }
+                              return {
+                                ...record,
+                                children: updateNote(record.children)
+                              };
+                            });
+                          };
+                          const newRecords = updateNote(prev);
+                          // 保存更新后的记录
+                          storageService.saveRecord(newRecords[0]);
+                          return newRecords;
+                        });
+                      };
+                      saveAndExitEdit();
+                    }}
+                    onSubmitEditing={() => {
+                      // 在提交时也调用相同的保存和退出编辑状态的逻辑
+                      const saveAndExitEdit = () => {
+                        setTimeRecords(prev => {
+                          const updateNote = (records: TimeRecord[]): TimeRecord[] => {
+                            return records.map(record => {
+                              if (record.id === item.id) {
+                                return { ...record, isEditingNote: false };
+                              }
+                              return {
+                                ...record,
+                                children: updateNote(record.children)
+                              };
+                            });
+                          };
+                          const newRecords = updateNote(prev);
+                          // 保存更新后的记录
+                          storageService.saveRecord(newRecords[0]);
+                          return newRecords;
+                        });
+                      };
+                      saveAndExitEdit();
+                    }}
+                  />
+                ) : (
+                  <View style={styles.noteDisplay}>
+                    {item.note ? (
+                      <Text style={styles.noteText}>{item.note}</Text>
+                    ) : (
+                      <Text style={styles.notePlaceholder}>Add note...</Text>
+                    )}
+                  </View>
+                )}
               </TouchableOpacity>
 
-              {/* 添加休息按钮 */}
-              <TouchableOpacity 
-                style={[styles.addButton, styles.breakButton]}
-                onPress={() => {
-                  const newId = Date.now().toString();
-                  const newRecord: TimeRecord = {
-                    id: newId,
-                    time: 0,
-                    baseTime: 0,  // 初始化基础时间为0
-                    isRunning: false,
-                    label: 'Break',
-                    children: [],
-                    parentId: item.id,
-                    isCollapsed: false,
-                    avatarColor: '#FFB6C1', // 使用柔和的粉色作为休息记录的标识色
-                    createdAt: new Date(),
-                    isEditing: false,
-                    note: '',
-                    isEditingNote: false,
-                  };
+              {/* 操作按钮 */}
+              <View style={styles.actionRow}>
+                {/* 播放/暂停按钮 */}
+                <TouchableOpacity 
+                  style={[styles.controlButton, item.isRunning && styles.runningButton]}
+                  onPress={() => toggleRecord(item.id)}
+                >
+                  <View style={styles.controlButtonInner}>
+                    {item.isRunning ? (
+                      <View style={styles.pauseIcon}>
+                        <View style={styles.pauseBar} />
+                        <View style={styles.pauseBar} />
+                      </View>
+                    ) : (
+                      <View style={styles.playIcon} />
+                    )}
+                  </View>
+                </TouchableOpacity>
+                
+                {/* 添加子记录按钮 */}
+                <TouchableOpacity 
+                  style={styles.addButton}
+                  onPress={() => addNewRecord(item.id)}
+                >
+                  <Text style={styles.addButtonText}>+</Text>
+                </TouchableOpacity>
 
-                  setTimeRecords(prev => {
-                    const updateRecordTree = (records: TimeRecord[]): TimeRecord[] => {
-                      return records.map(record => {
-                        if (record.id === item.id) {
+                {/* 添加休息按钮 */}
+                <TouchableOpacity 
+                  style={[styles.addButton, styles.breakButton]}
+                  onPress={() => {
+                    const newId = Date.now().toString();
+                    const newRecord: TimeRecord = {
+                      id: newId,
+                      time: 0,
+                      baseTime: 0,  // 初始化基础时间为0
+                      isRunning: false,
+                      label: 'Break',
+                      children: [],
+                      parentId: item.id,
+                      isCollapsed: false,
+                      avatarColor: '#FFB6C1', // 使用柔和的粉色作为休息记录的标识色
+                      createdAt: new Date(),
+                      isEditing: false,
+                      note: '',
+                      isEditingNote: false,
+                    };
+
+                    setTimeRecords(prev => {
+                      const updateRecordTree = (records: TimeRecord[]): TimeRecord[] => {
+                        return records.map(record => {
+                          if (record.id === item.id) {
+                            return {
+                              ...record,
+                              children: [...record.children, newRecord]
+                            };
+                          }
                           return {
                             ...record,
-                            children: [...record.children, newRecord]
+                            children: updateRecordTree(record.children)
                           };
-                        }
-                        return {
-                          ...record,
-                          children: updateRecordTree(record.children)
-                        };
-                      });
-                    };
-                    const newRecords = updateRecordTree(prev);
-                    // 保存更新后的记录
-                    storageService.saveRecord(newRecords[0]);
-                    return newRecords;
-                  });
-                }}
-              >
-                <Text style={styles.addButtonText}>☕</Text>
-              </TouchableOpacity>
+                        });
+                      };
+                      const newRecords = updateRecordTree(prev);
+                      // 保存更新后的记录
+                      storageService.saveRecord(newRecords[0]);
+                      return newRecords;
+                    });
+                  }}
+                >
+                  <Text style={styles.addButtonText}>☕</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </View>
-      </View>
 
-      {/* 子记录列表 */}
-      {!item.isCollapsed && item.children.length > 0 && (
-        <View style={styles.childrenContainer}>
-          {item.children.map((child, index) => 
-            renderTimeRecord({
-              item: child,
-              depth: depth + 1, // 增加子项的深度
-              isLastChild: index === item.children.length - 1
-            })
-          )}
-        </View>
-      )}
-    </View>
-  );
+        {/* 子记录列表 */}
+        {!item.isCollapsed && item.children.length > 0 && (
+          <View style={styles.childrenContainer}>
+            {item.children.map((child, index) => 
+              renderTimeRecord({
+                item: child,
+                depth: depth + 1, // 增加子项的深度
+                isLastChild: index === item.children.length - 1
+              })
+            )}
+          </View>
+        )}
+      </View>
+    );
+  };
 
   // 修改返回按钮的处理函数
   const handleBack = useCallback(async () => {
@@ -699,12 +711,29 @@ export default function RecorderExecutionScreen() {
     router.replace("/recorder/");
   }, [timeRecords]);
 
+  // Add a function to check if any record is running
+  const isAnyRecordRunning = useCallback(() => {
+    const checkRunning = (records: TimeRecord[]): boolean => {
+      return records.some(record => {
+        if (record.isRunning) return true;
+        if (record.children.length > 0) {
+          return checkRunning(record.children);
+        }
+        return false;
+      });
+    };
+    return checkRunning(timeRecords);
+  }, [timeRecords]);
+
+  // Use the keep-awake hook when any record is running
+  useKeepAwake(isAnyRecordRunning() ? 'recorder-timing' : 'recorder-idle');
+
   // 渲染主界面
   return (
     <KeyboardAvoidingView 
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 50} // 增加偏移量
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 50}
     >
       <View style={styles.container}>
         {/* 页面头部 */}

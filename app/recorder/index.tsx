@@ -25,55 +25,16 @@ export default function Home() {
     return () => clearInterval(timer);
   }, []);
 
-  // Update records time calculation
-  const getUpdatedTime = useCallback((record: TimeRecord) => {
-    if (record.isRunning && record.startTime) {
-      const elapsedSeconds = Math.floor((Date.now() - record.startTime) / 1000);
-      return record.baseTime + elapsedSeconds;
-    }
-    return record.time || 0;
-  }, []);
-
   // 格式化时间
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+      return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
     return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-  const handleAddRecorder = async () => {
-    const newId = Date.now().toString();
-    const existingRecords = await storageService.loadRecords();
-    
-    // Create new record
-    const newRecord = {
-      id: newId,
-      time: 0,
-      isRunning: false,
-      label: 'Todo...',
-      children: [],
-      parentId: null,
-      isCollapsed: false,
-      avatarColor: generateRandomColor(),
-      createdAt: new Date(),
-      isEditing: false,
-      baseTime: 0
-    };
- 
-    await storageService.saveRecords([...existingRecords, newRecord]);
-    
-    // Navigate to recorder page
-    router.push(`/recorder/${newId}`);
-  };
-
-  // 格式化日期
-  const formatDate = (date: Date) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
   };
 
   // 当页面获得焦点时重新加载记录
@@ -88,7 +49,9 @@ export default function Home() {
             const elapsedSeconds = Math.floor((now - record.startTime) / 1000);
             return {
               ...record,
-              time: record.baseTime + elapsedSeconds
+              time: (record.baseTime || 0) + elapsedSeconds,
+              baseTime: (record.baseTime || 0) + elapsedSeconds,
+              startTime: now
             };
           }
           return record;
@@ -161,6 +124,17 @@ export default function Home() {
     );
   };
 
+  // 格式化日期
+  const formatDate = (date: Date) => {
+    return new Date(date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
   // 渲染单个记录项
   const renderRecordItem = (record: TimeRecord) => (
     <Swipeable
@@ -204,7 +178,7 @@ export default function Home() {
                 styles.recordTime,
                 record.isRunning && styles.runningTime
               ]}>
-                {formatTime(getUpdatedTime(record))}
+                {formatTime(record.isRunning ? (record.baseTime || 0) + Math.floor((currentTime - (record.startTime || currentTime)) / 1000) : record.time || 0)}
               </Text>
             </View>
           </View>
@@ -212,6 +186,31 @@ export default function Home() {
       </TouchableOpacity>
     </Swipeable>
   );
+
+  const handleAddRecorder = async () => {
+    const newId = Date.now().toString();
+    const existingRecords = await storageService.loadRecords();
+    
+    // Create new record
+    const newRecord = {
+      id: newId,
+      time: 0,
+      isRunning: false,
+      label: 'Todo...',
+      children: [],
+      parentId: null,
+      isCollapsed: false,
+      avatarColor: generateRandomColor(),
+      createdAt: new Date(),
+      isEditing: false,
+      baseTime: 0
+    };
+ 
+    await storageService.saveRecords([...existingRecords, newRecord]);
+    
+    // Navigate to recorder page
+    router.push(`/recorder/${newId}`);
+  };
 
   return (
     <GestureHandlerRootView style={styles.container}>
